@@ -1,12 +1,13 @@
 import SwiftUI
 
 struct GameOverlayView: View {
-    @StateObject private var gameManager: GameManager
+    @ObservedObject private var gameManager: GameManager
     @StateObject private var vm = MachineViewModel() 
     @State private var isOverlayExpanded: Bool
+    var initialSavedSolution: SavedDFASolution? = nil
     
-    init(initialMode: GameMode = .campaign) {
-        let manager = GameManager()
+    init(initialMode: GameMode = .campaign, savedSolutionToLoad: SavedDFASolution? = nil) {
+        let manager = GameManager.shared
         manager.currentMode = initialMode
         
         switch initialMode {
@@ -16,7 +17,8 @@ struct GameOverlayView: View {
             _isOverlayExpanded = State(initialValue: true)
         }
         
-        _gameManager = StateObject(wrappedValue: manager)
+        self.gameManager = manager
+        self.initialSavedSolution = savedSolutionToLoad
     }
     
     
@@ -32,7 +34,12 @@ struct GameOverlayView: View {
     var body: some View {
         ZStack {
             
-            MainCanvasView(vm: vm)
+            MainCanvasView(vm: vm, onLoadSavedSolution: { solution in
+                gameManager.loadSavedSolution(solution, into: vm)
+                withAnimation(.spring()) {
+                    isOverlayExpanded = true
+                }
+            })
                 .zIndex(0)
             
             
@@ -376,20 +383,26 @@ struct GameOverlayView: View {
             }
         }
         .onAppear {
+            if let solution = initialSavedSolution {
+                gameManager.loadSavedSolution(solution, into: vm)
+                return
+            }
+            
             vm.resetSimulation()
             vm.nodes.removeAll()
             vm.transitions.removeAll()
             gameManager.resetTests()
             
             if gameManager.currentMode == .endlessAI {
-                if gameManager.currentLevel == nil {
+                if gameManager.currentLevel == nil || !gameManager.wasGeneratedByAI {
                     Task {
                         await gameManager.presentNextAILevel()
                     }
                 }
             } else if gameManager.currentMode == .campaign {
-                if gameManager.currentLevel == nil {
-                    gameManager.loadCampaignLevel(index: 0)
+                if gameManager.currentLevel == nil || gameManager.wasGeneratedByAI {
+                    let saved = UserDefaults.standard.integer(forKey: "savedCampaignIndex")
+                    gameManager.loadCampaignLevel(index: saved)
                 }
             }
         }

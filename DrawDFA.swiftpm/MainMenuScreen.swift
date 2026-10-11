@@ -3,13 +3,15 @@ import SwiftUI
 struct MainMenuScreen: View {
     @State private var navigateToGame = false
     @State private var selectedMode: GameMode = .campaign
+    @State private var showingSavedSolutions = false
+    @State private var solutionToLoad: SavedDFASolution? = nil
     
     var body: some View {
         NavigationStack {
             ZStack {
                 Color(UIColor.systemBackground).ignoresSafeArea()
                 
-                VStack(spacing: 40) {
+                VStack(spacing: 35) {
                     VStack(spacing: 10) {
                         Image(systemName: "point.3.connected.trianglepath.dotted")
                             .font(.system(size: 80))
@@ -21,15 +23,16 @@ struct MainMenuScreen: View {
                             .font(.title3)
                             .foregroundColor(.secondary)
                     }
-                    .padding(.bottom, 40)
+                    .padding(.bottom, 20)
                     
-                    VStack(spacing: 20) {
+                    VStack(spacing: 16) {
                         MenuButton(
                             title: "Campaign Mode (Demo Mode)",
                             subtitle: "Play 3 handcrafted DFA puzzles",
                             icon: "flag.checkered",
                             color: .blue
                         ) {
+                            solutionToLoad = nil
                             selectedMode = .campaign
                             navigateToGame = true
                         }
@@ -40,6 +43,7 @@ struct MainMenuScreen: View {
                             icon: "infinity",
                             color: .purple
                         ) {
+                            solutionToLoad = nil
                             selectedMode = .endlessAI
                             navigateToGame = true
                         }
@@ -50,15 +54,32 @@ struct MainMenuScreen: View {
                             icon: "square.dashed",
                             color: .orange
                         ) {
+                            solutionToLoad = nil
                             selectedMode = .blankCanvas
                             navigateToGame = true
+                        }
+                        
+                        MenuButton(
+                            title: "Saved Solutions",
+                            subtitle: "Review your past solved DFA diagrams",
+                            icon: "bookmark.fill",
+                            color: .teal
+                        ) {
+                            showingSavedSolutions = true
                         }
                     }
                     .padding(.horizontal, 40)
                 }
             }
+            .sheet(isPresented: $showingSavedSolutions) {
+                SavedSolutionsView { solution in
+                    self.solutionToLoad = solution
+                    self.selectedMode = .campaign
+                    self.navigateToGame = true
+                }
+            }
             .navigationDestination(isPresented: $navigateToGame) {
-                GameOverlayView(initialMode: selectedMode)
+                GameOverlayView(initialMode: selectedMode, savedSolutionToLoad: solutionToLoad)
                     .navigationBarBackButtonHidden(true)
             }
         }

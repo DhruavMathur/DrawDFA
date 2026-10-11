@@ -1,7 +1,7 @@
 import SwiftUI
 
 
-struct StateNode: Identifiable, Equatable {
+struct StateNode: Identifiable, Equatable, Codable {
     let id: UUID
     var name: String
     var position: CGPoint
@@ -18,7 +18,7 @@ struct StateNode: Identifiable, Equatable {
 }
 
 
-struct Transition: Identifiable, Equatable {
+struct Transition: Identifiable, Equatable, Codable {
     let id: UUID
     var fromNodeID: UUID
     var toNodeID: UUID
@@ -29,6 +29,50 @@ struct Transition: Identifiable, Equatable {
         self.fromNodeID = fromNodeID
         self.toNodeID = toNodeID
         self.symbols = symbols
+    }
+    
+    enum CodingKeys: String, CodingKey {
+        case id, fromNodeID, toNodeID, symbolStrings
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        fromNodeID = try container.decode(UUID.self, forKey: .fromNodeID)
+        toNodeID = try container.decode(UUID.self, forKey: .toNodeID)
+        let strings = try container.decode([String].self, forKey: .symbolStrings)
+        symbols = strings.compactMap { $0.first }
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(fromNodeID, forKey: .fromNodeID)
+        try container.encode(toNodeID, forKey: .toNodeID)
+        try container.encode(symbols.map { String($0) }, forKey: .symbolStrings)
+    }
+}
+
+struct SavedDFASolution: Identifiable, Codable, Equatable {
+    var id: UUID
+    var level: DFALevel
+    var nodes: [StateNode]
+    var transitions: [Transition]
+    var completedAt: Date
+    
+    init(id: UUID = UUID(), level: DFALevel, nodes: [StateNode], transitions: [Transition], completedAt: Date = Date()) {
+        self.id = id
+        self.level = level
+        self.nodes = nodes
+        self.transitions = transitions
+        self.completedAt = completedAt
+    }
+    
+    var formattedDate: String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: completedAt)
     }
 }
 

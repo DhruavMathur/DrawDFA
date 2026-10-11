@@ -32,42 +32,88 @@ class CloudLLMService: ObservableObject {
         return isEnabled && !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     
-    /// Sends proposed DFA question to Cloud LLM to verify regularity, refine the rule, and generate test cases
+    /// Sends proposed DFA question or generates a creative puzzle using the Cloud LLM
     func verifyAndGenerateTestCases(
-        proposedTitle: String,
-        proposedRule: String
+        proposedTitle: String? = nil,
+        proposedRule: String? = nil,
+        categoryHint: String? = nil,
+        recentTitles: [String] = []
     ) async throws -> CloudVerificationResult {
         guard isConfigured else {
             throw NSError(domain: "CloudLLMService", code: 400, userInfo: [NSLocalizedDescriptionKey: "API Key is not configured."])
         }
         
-        let prompt = """
-        You are a theoretical computer science professor and formal language expert specializing in Deterministic Finite Automata (DFA).
-        The DFA alphabet is strictly binary: {0, 1}.
+        let exclusionText = recentTitles.isEmpty ? "None" : recentTitles.map { "• \($0)" }.joined(separator: "\n")
+        let categoryText = categoryHint ?? "Choose a random distinct category: Substring Exclusion, Modulo/Parity, Positional, Prefix/Suffix, or Bounds."
         
-        A game designer proposed the following DFA puzzle:
-        Title: "\(proposedTitle)"
-        Proposed Rule: "\(proposedRule)"
-        
-        CRITICAL TASK:
-        1. Check whether this rule defines a REGULAR language (solvable by a finite-state machine).
-           - Reminder: Counting unbounded symbols (e.g. "equal 0s and 1s", "same count of 0 and 1"), palindromes, or 0^n 1^n are NOT regular languages.
-           - If the rule is NOT regular, adapt it to the closest valid REGULAR language (e.g., change "equal 0s and 1s" to "even number of 0s and 1s", or "at least two 0s and two 1s").
-        2. Provide a mathematically exact regular expression 'regexPattern' over {0,1} anchored with ^ and $ matching the language.
-        3. Provide 3 unique binary strings that 100% pass the rule and match the regex.
-        4. Provide 3 unique binary strings that 100% fail the rule and do NOT match the regex.
-        
-        Return your answer as a JSON object with this exact schema:
-        {
-          "isRegularLanguage": boolean,
-          "refinedTitle": "string",
-          "refinedRule": "string (clear player-facing instruction)",
-          "regexPattern": "string (e.g. ^[01]*01$)",
-          "passingStrings": ["string", "string", "string"],
-          "failingStrings": ["string", "string", "string"],
-          "explanation": "string (brief note on how rule is regular and why test cases work)"
+        let prompt: String
+        if let title = proposedTitle, let rule = proposedRule {
+            prompt = """
+            You are a theoretical computer science professor and formal language expert specializing in Deterministic Finite Automata (DFA).
+            The DFA alphabet is strictly binary: {0, 1}.
+            
+            A game designer proposed the following DFA puzzle:
+            Title: "\(title)"
+            Proposed Rule: "\(rule)"
+            
+            AVOID REPETITION:
+            Do NOT generate anything similar to these recent puzzles:
+            \(exclusionText)
+            
+            CRITICAL TASK:
+            1. Check whether this rule defines a REGULAR language (solvable by a finite-state machine).
+               - Reminder: Counting unbounded symbols (e.g. "equal 0s and 1s", "same count of 0 and 1"), palindromes, or 0^n 1^n are NOT regular languages.
+               - If the rule is NOT regular, adapt it to the closest valid REGULAR language.
+            2. Provide a mathematically exact regular expression 'regexPattern' over {0,1} anchored with ^ and $ matching the language.
+            3. Provide 3 unique binary strings that 100% pass the rule and match the regex.
+            4. Provide 3 unique binary strings that 100% fail the rule and do NOT match the regex.
+            
+            Return your answer as a JSON object with this exact schema:
+            {
+              "isRegularLanguage": boolean,
+              "refinedTitle": "string",
+              "refinedRule": "string (clear player-facing instruction)",
+              "regexPattern": "string (e.g. ^[01]*01$)",
+              "passingStrings": ["string", "string", "string"],
+              "failingStrings": ["string", "string", "string"],
+              "explanation": "string (brief note on how rule is regular and why test cases work)"
+            }
+            """
+        } else {
+            prompt = """
+            You are a puzzle game designer and theoretical computer science professor creating Deterministic Finite Automaton (DFA) logic puzzles.
+            The DFA alphabet is strictly binary: {0, 1}.
+            
+            GOAL:
+            Design a FRESH, CREATIVE, and UNAMBIGUOUS DFA logic puzzle over {0, 1}.
+            
+            CATEGORY FOCUS:
+            \(categoryText)
+            
+            STRICT EXCLUSION RULE:
+            Do NOT generate any puzzle similar to these recent puzzles:
+            \(exclusionText)
+            You must explore a DIFFERENT concept or pattern!
+            
+            CRITICAL REQUIREMENTS:
+            1. The rule MUST define a REGULAR language (solvable by a finite-state machine).
+               - NEVER propose non-regular languages: no palindromes, no equal counts of 0 and 1, no unbounded counting.
+            2. Provide a mathematically exact regular expression 'regexPattern' over {0,1} anchored with ^ and $ matching the language.
+            3. Provide 3 unique binary strings that 100% pass the rule and match the regex.
+            4. Provide 3 unique binary strings that 100% fail the rule and do NOT match the regex.
+            
+            Return your answer as a JSON object with this exact schema:
+            {
+              "isRegularLanguage": boolean,
+              "refinedTitle": "string (catchy, descriptive name)",
+              "refinedRule": "string (clear player-facing instruction)",
+              "regexPattern": "string (anchored with ^ and $)",
+              "passingStrings": ["string", "string", "string"],
+              "failingStrings": ["string", "string", "string"],
+              "explanation": "string (brief note on DFA states and why test cases work)"
+            }
+            """
         }
-        """
         
         switch providerType {
         case .gemini:
@@ -144,6 +190,7 @@ class CloudLLMService: ObservableObject {
         let payload: [String: Any] = [
             "model": modelName.isEmpty ? "gpt-4o-mini" : modelName,
             "response_format": ["type": "json_object"],
+            "temperature": 0.75,
             "messages": [
                 [
                     "role": "system",

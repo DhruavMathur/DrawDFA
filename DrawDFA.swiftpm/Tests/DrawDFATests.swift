@@ -1,6 +1,9 @@
 import XCTest
-import SwiftUI
+import Foundation
+import CoreGraphics
 @testable import AppModule
+
+typealias Transition = AppModule.Transition
 
 final class AutomatonEngineTests: XCTestCase {
     
@@ -12,7 +15,7 @@ final class AutomatonEngineTests: XCTestCase {
         
         let (steps, status) = AutomatonEngine.generateSteps(for: "", nodes: nodes, transitions: transitions)
         
-        XCTAssertEqual(status, .success)
+        XCTAssertEqual(status, SimulationStatus.success)
         XCTAssertEqual(steps.count, 1)
         XCTAssertEqual(steps.first?.activeNodeID, q0.id)
     }
@@ -154,6 +157,12 @@ final class DFAPuzzleValidatorTests: XCTestCase {
 final class GameManagerBufferTests: XCTestCase {
     
     @MainActor
+    func testTargetBufferSizeIsTwo() {
+        let gameManager = GameManager()
+        XCTAssertEqual(gameManager.targetBufferSize, 2, "targetBufferSize should be configured to 2")
+    }
+    
+    @MainActor
     func testBufferInitializationAndPopping() async {
         let gameManager = GameManager()
         
@@ -170,5 +179,70 @@ final class GameManagerBufferTests: XCTestCase {
         XCTAssertEqual(gameManager.currentLevel?.id, 1)
         XCTAssertEqual(gameManager.bufferedLevels.count, 1)
         XCTAssertEqual(gameManager.bufferedLevels.first?.id, 2)
+    }
+}
+
+final class SolutionStorageManagerTests: XCTestCase {
+    
+    @MainActor
+    func testSingleCopyOverwriteRule() {
+        let storage = SolutionStorageManager.shared
+        let initialCount = storage.savedSolutions.count
+        
+        let testLevel = DFALevel(id: 9999, title: "Unit Test Level", ruleDescription: "Test Rule", passingStrings: ["01"], failingStrings: ["10"])
+        
+        let q0 = StateNode(name: "q0", position: .zero, isStartState: true, isAcceptingState: false)
+        let q1 = StateNode(name: "q1", position: CGPoint(x: 100, y: 100), isStartState: false, isAcceptingState: true)
+        let initialNodes = [q0, q1]
+        let initialTransitions = [Transition(fromNodeID: q0.id, toNodeID: q1.id, symbols: ["0"])]
+        
+        // 1. Save new solution
+        storage.saveOrUpdate(level: testLevel, nodes: initialNodes, transitions: initialTransitions)
+        XCTAssertEqual(storage.savedSolutions.count, initialCount + 1)
+        
+        let saved = storage.savedSolutions.first(where: { $0.level.id == 9999 })
+        XCTAssertNotNil(saved)
+        XCTAssertEqual(saved?.nodes.count, 2)
+        XCTAssertEqual(saved?.transitions.count, 1)
+        
+        // 2. Modify diagram and save again -> should OVERWRITE, not create duplicate
+        let updatedNodes = [q0] // Changed to 1 node
+        let updatedTransitions: [Transition] = []
+        storage.saveOrUpdate(level: testLevel, nodes: updatedNodes, transitions: updatedTransitions)
+        
+        // Count must NOT increase
+        XCTAssertEqual(storage.savedSolutions.count, initialCount + 1, "Single-copy rule: should overwrite existing solution without increasing count")
+        
+        let updated = storage.savedSolutions.first(where: { $0.level.id == 9999 })
+        XCTAssertEqual(updated?.nodes.count, 1, "Overwritten solution should contain updated node list")
+        XCTAssertEqual(updated?.transitions.count, 0, "Overwritten solution should contain updated transitions list")
+        
+        // Cleanup
+        if let toDelete = updated {
+            storage.deleteSolution(id: toDelete.id)
+            XCTAssertEqual(storage.savedSolutions.count, initialCount)
+        }
+    }
+}
+
+final class CampaignProgressPersistenceTests: XCTestCase {
+    
+    @MainActor
+    func testCampaignLevelPersistence() {
+        let gameManager = GameManager()
+        
+        // Advance to level 1 (Level 2: Target Lock)
+        gameManager.loadCampaignLevel(index: 1)
+        XCTAssertEqual(gameManager.campaignIndex, 1)
+        XCTAssertEqual(gameManager.currentLevel?.title, "Level 2: Target Lock (Contains '11')")
+        XCTAssertFalse(gameManager.wasGeneratedByAI)
+        
+        // Verify saved to UserDefaults
+        let saved = UserDefaults.standard.integer(forKey: "savedCampaignIndex")
+        XCTAssertEqual(saved, 1)
+        
+        // Restore to level 0 for clean state
+        gameManager.loadCampaignLevel(index: 0)
+        XCTAssertEqual(gameManager.campaignIndex, 0)
     }
 }

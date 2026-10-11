@@ -11,6 +11,14 @@ struct MainCanvasView: View {
     
     @State private var isDrawModeEnabled = false
     @State private var showingInfoSheet = false
+    @State private var showingSavedSolutionsSheet = false
+    
+    var onLoadSavedSolution: ((SavedDFASolution) -> Void)? = nil
+    
+    init(vm: MachineViewModel, onLoadSavedSolution: ((SavedDFASolution) -> Void)? = nil) {
+        self.vm = vm
+        self.onLoadSavedSolution = onLoadSavedSolution
+    }
     
     var body: some View {
         ZStack {
@@ -43,6 +51,14 @@ struct MainCanvasView: View {
                     Text("Draw DFA")
                         .font(.title2.bold())
                     Spacer()
+                    
+                    Button(action: {
+                        showingSavedSolutionsSheet = true
+                    }) {
+                        Image(systemName: "bookmark")
+                            .font(.title2)
+                    }
+                    .padding(.trailing, 5)
                     
                     Button(action: {
                         showingInfoSheet = true
@@ -138,6 +154,9 @@ struct MainCanvasView: View {
         }
         .sheet(isPresented: $showingInfoSheet) {
             HelpInstructionsView()
+        }
+        .sheet(isPresented: $showingSavedSolutionsSheet) {
+            SavedSolutionsView(onLoadSolution: onLoadSavedSolution)
         }
     }
     

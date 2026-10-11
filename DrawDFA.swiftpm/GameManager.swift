@@ -19,6 +19,8 @@ enum TestResult {
 
 @MainActor
 class GameManager: ObservableObject {
+    static let shared = GameManager()
+    
     @Published var currentMode: GameMode = .campaign
     @Published var currentLevel: DFALevel?
     @Published var testResults: [String: TestResult] = [:]
@@ -29,6 +31,17 @@ class GameManager: ObservableObject {
     
     @Published var bufferedLevels: [DFALevel] = []
     let targetBufferSize = 2
+    
+    private var recentPuzzles: [String] = []
+    
+    private let puzzleCategories = [
+        "Prefix / Suffix: A starting or ending sequence (e.g. ends in '010', starts with '00', ends in '11', starts and ends with the same symbol)",
+        "Substring Exclusion: Must NOT contain a specific substring (e.g. does NOT contain '11', does NOT contain '00')",
+        "Parity & Modulo: Parity or divisibility (e.g. odd number of 1s, even number of 0s, total length is even, count of 1s is a multiple of 3)",
+        "Positional Constraint: A constraint on a fixed position (e.g. second symbol is '1', third symbol from end is '0')",
+        "Count Bounds: An upper or lower bound on occurrences (e.g. contains at least two '0's, contains at most one '1', exactly two '1's)",
+        "Alternation: Patterns of alternating symbols (e.g. strictly alternating 0s and 1s, no consecutive identical symbols)"
+    ]
     
     @Published var isLiveTesting = false
     @Published var currentLiveTestResult: (string: String, passed: Bool)? = nil
@@ -60,15 +73,22 @@ class GameManager: ObservableObject {
         )
     ]
     
+    private let campaignLevelsKey = "savedCampaignIndex"
+    
     init() {
-        loadCampaignLevel(index: 0)
+        let savedIndex = UserDefaults.standard.integer(forKey: campaignLevelsKey)
+        let validIndex = (savedIndex >= 0 && savedIndex < campaignLevels.count) ? savedIndex : 0
+        campaignIndex = validIndex
+        loadCampaignLevel(index: validIndex)
         replenishBufferIfNeeded()
     }
     
     func loadCampaignLevel(index: Int) {
-        guard index >= 0 && index < campaignLevels.count else { return }
-        campaignIndex = index
-        self.currentLevel = campaignLevels[index]
+        let validIndex = (index >= 0 && index < campaignLevels.count) ? index : 0
+        campaignIndex = validIndex
+        UserDefaults.standard.set(validIndex, forKey: campaignLevelsKey)
+        self.currentLevel = campaignLevels[validIndex]
+        self.wasGeneratedByAI = false
         resetTests()
     }
     
@@ -78,21 +98,22 @@ class GameManager: ObservableObject {
         
         switch newMode {
         case .campaign:
-            loadCampaignLevel(index: 0)
+            let savedIndex = UserDefaults.standard.integer(forKey: campaignLevelsKey)
+            loadCampaignLevel(index: savedIndex)
         case .endlessAI:
             Task {
                 await presentNextAILevel()
             }
         case .blankCanvas:
             currentLevel = nil
+            wasGeneratedByAI = false
         }
     }
     
-    private var isReplenishingBuffer = false
+    private var activeReplenishTasks = 0
     
     func presentNextAILevel() async {
         resetTests()
-        currentLevel = nil
         
         if let nextLevel = bufferedLevels.first {
             bufferedLevels.removeFirst()
@@ -111,22 +132,19 @@ class GameManager: ObservableObject {
         replenishBufferIfNeeded()
     }
     
-    private func replenishBufferIfNeeded() {
-        guard !isReplenishingBuffer else { return }
-        guard bufferedLevels.count < targetBufferSize else { return }
+    func replenishBufferIfNeeded() {
+        let needed = targetBufferSize - bufferedLevels.count - activeReplenishTasks
+        guard needed > 0 else { return }
         
-        isReplenishingBuffer = true
-        
-        Task {
-            while self.bufferedLevels.count < self.targetBufferSize {
+        for _ in 0..<needed {
+            activeReplenishTasks += 1
+            Task {
                 let level = await self.generateSingleLevel()
                 await MainActor.run {
                     self.bufferedLevels.append(level)
+                    self.activeReplenishTasks = max(0, self.activeReplenishTasks - 1)
                     print("📥 Buffered Level in background: \(level.title) (Queue size: \(self.bufferedLevels.count))")
                 }
-            }
-            await MainActor.run {
-                self.isReplenishingBuffer = false
             }
         }
     }
@@ -182,15 +200,16 @@ class GameManager: ObservableObject {
             draftFailing = ["1", "111", "01"]
         }
 
-        // Tier 2: If Cloud LLM Provider is configured, verify and refine using the Cloud LLM
+        // Tier 2: If Cloud LLM Provider is configured, creatively generate or refine using the Cloud LLM
         if CloudLLMService.shared.isConfigured {
-            let proposedTitle = draftTitle ?? "Binary Pattern Puzzle"
-            let proposedRule = draftRule ?? "Draw a DFA that accepts strings ending with '01'."
+            let selectedCategory = puzzleCategories.randomElement()
             
             do {
                 let cloudResult = try await CloudLLMService.shared.verifyAndGenerateTestCases(
-                    proposedTitle: proposedTitle,
-                    proposedRule: proposedRule
+                    proposedTitle: draftTitle,
+                    proposedRule: draftRule,
+                    categoryHint: selectedCategory,
+                    recentTitles: recentPuzzles
                 )
                 
                 draftTitle = cloudResult.refinedTitle
@@ -212,6 +231,12 @@ class GameManager: ObservableObject {
             )
             
             if isValid && !verifiedPassing.isEmpty && !verifiedFailing.isEmpty {
+                // Record in recent history to prevent repetition
+                self.recentPuzzles.append(title)
+                if self.recentPuzzles.count > 6 {
+                    self.recentPuzzles.removeFirst()
+                }
+                
                 return DFALevel(
                     id: Int.random(in: 1000...9000),
                     title: title,
@@ -418,8 +443,26 @@ class GameManager: ObservableObject {
             vm.resetSimulation()
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
+        
         try? await Task.sleep(nanoseconds: 500_000_000)
         isLiveTesting = false
-        return testResults.values.allSatisfy { $0 == .passed }
+        
+        let allPassed = !testResults.isEmpty && testResults.values.allSatisfy { $0 == .passed }
+        if allPassed {
+            SolutionStorageManager.shared.saveOrUpdate(level: level, nodes: vm.nodes, transitions: vm.transitions)
+        }
+        
+        return allPassed
+    }
+    
+    /// Loads a previously saved DFA solution onto the canvas and switches to that level
+    func loadSavedSolution(_ solution: SavedDFASolution, into vm: MachineViewModel) {
+        self.currentLevel = solution.level
+        resetTests()
+        
+        vm.resetSimulation()
+        vm.nodes = solution.nodes
+        vm.transitions = solution.transitions
+        print("📂 Loaded saved solution '\(solution.level.title)' onto canvas")
     }
 }
