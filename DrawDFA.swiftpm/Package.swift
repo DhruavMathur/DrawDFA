@@ -38,9 +38,15 @@ let package = Package(
         .executableTarget(
             name: "AppModule",
             path: ".",
+            exclude: ["Tests"],
             swiftSettings: [
                 .enableUpcomingFeature("BareSlashRegexLiterals")
             ]
+        ),
+        .testTarget(
+            name: "DrawDFATests",
+            dependencies: ["AppModule"],
+            path: "Tests"
         )
     ]
 )

@@ -73,7 +73,15 @@ struct MainCanvasView: View {
                 
                 // MARK: - Bottom Controls
                 HStack(spacing: 15) {
-                    TextField("Enter binary string (e.g., 1011)", text: $vm.testString)
+                    Toggle(isOn: $vm.enforceStrictDFA) {
+                        Image(systemName: "checkmark.seal.fill")
+                        Text("Strict DFA")
+                    }
+                    .toggleStyle(.button)
+                    .tint(.orange)
+                    .padding(.trailing, 10)
+                    
+                    TextField("Enter string (leave blank for ε)", text: $vm.testString)
                         .textFieldStyle(.roundedBorder)
                         .keyboardType(.numberPad)
                         .frame(maxWidth: 350)
@@ -88,7 +96,7 @@ struct MainCanvasView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.green)
-                    .disabled(vm.simulationStatus == .running || vm.testString.isEmpty)
+                    .disabled(vm.simulationStatus == .running)
                     
                     Button(action: {
                         vm.resetSimulation()
@@ -106,7 +114,9 @@ struct MainCanvasView: View {
         }
         .alert("Add Transition", isPresented: $showingSymbolAlert) {
             TextField("Symbols (e.g. 0, 1)", text: $transitionSymbolParam)
-                .keyboardType(.default)
+                .keyboardType(.numbersAndPunctuation)
+                .autocorrectionDisabled(true)
+                .textInputAutocapitalization(.never)
             Button("Add") {
                 if let start = pendingTransitionStart, let end = pendingTransitionEnd {
                     let chars: [Character] = transitionSymbolParam.replacingOccurrences(of: " ", with: "").replacingOccurrences(of: ",", with: "").map { $0 }
@@ -164,24 +174,37 @@ struct MainCanvasView: View {
             
             if vm.simulationStatus == .running {
                 VStack {
+                    Spacer()
                     Text("Reading: \(vm.remainingInputString)")
                         .font(.headline)
                         .padding()
                         .background(.ultraThinMaterial)
                         .clipShape(Capsule())
-                        .padding(.top, 160)
-                    Spacer()
+                        .padding(.bottom, 120)
                 }
             } else if case .failure(let reason) = vm.simulationStatus {
                 VStack {
+                    Spacer()
                     Text("Crashed: \(reason)")
                         .font(.headline)
                         .foregroundColor(.white)
                         .padding()
                         .background(Color.red.opacity(0.8))
                         .clipShape(Capsule())
-                        .padding(.top, 160)
+                        .padding(.bottom, 120)
+                }
+            } else if let toast = vm.toastMessage {
+                VStack {
                     Spacer()
+                    Text(toast)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .padding()
+                        .background(Color.red.opacity(0.9))
+                        .clipShape(Capsule())
+                        .shadow(radius: 10)
+                        .padding(.bottom, 120)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
         }

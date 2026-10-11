@@ -27,6 +27,9 @@ class GameManager: ObservableObject {
     @Published var isGeneratingAILevel = false
     @Published var wasGeneratedByAI = false
     
+    @Published var bufferedLevels: [DFALevel] = []
+    let targetBufferSize = 2
+    
     @Published var isLiveTesting = false
     @Published var currentLiveTestResult: (string: String, passed: Bool)? = nil
     
@@ -36,26 +39,30 @@ class GameManager: ObservableObject {
             title: "Level 1: The Basics (Ends in '01')",
             ruleDescription: "Draw a DFA that accepts strings ending in '01'.",
             passingStrings: ["01", "101", "001"],
-            failingStrings: ["0", "11", "10"]
+            failingStrings: ["0", "11", "10"],
+            regexPattern: "^[01]*01$"
         ),
         DFALevel(
             id: 1,
             title: "Level 2: Target Lock (Contains '11')",
             ruleDescription: "Draw a DFA that accepts strings containing '11'.",
             passingStrings: ["11", "011", "110"],
-            failingStrings: ["101", "000", "10"]
+            failingStrings: ["101", "000", "10"],
+            regexPattern: "^[01]*11[01]*$"
         ),
         DFALevel(
             id: 2,
             title: "Level 3: Exact Match ('101')",
             ruleDescription: "Draw a DFA that exclusively accepts the exact string '101'.",
             passingStrings: ["101"],
-            failingStrings: ["10", "1010", "111"]
+            failingStrings: ["10", "1010", "111"],
+            regexPattern: "^101$"
         )
     ]
     
     init() {
         loadCampaignLevel(index: 0)
+        replenishBufferIfNeeded()
     }
     
     func loadCampaignLevel(index: Int) {
@@ -74,103 +81,197 @@ class GameManager: ObservableObject {
             loadCampaignLevel(index: 0)
         case .endlessAI:
             Task {
-                await generateNextAILevel()
+                await presentNextAILevel()
             }
         case .blankCanvas:
             currentLevel = nil
         }
     }
     
-    func generateNextAILevel() async {
-        isGeneratingAILevel = true
+    private var isReplenishingBuffer = false
+    
+    func presentNextAILevel() async {
         resetTests()
         currentLevel = nil
         
-        defer { isGeneratingAILevel = false }
-        
-        #if canImport(FoundationModels)
-        if #available(iOS 26.0, *) {
-            guard SystemLanguageModel.default.availability == .available else {
-                print("SystemLanguageModel not available.")
-                loadFallbackAILevel()
-                return
-            }
-            
-            do {
-                let session = LanguageModelSession {
-                    "You are an expert puzzle game designer creating Deterministic Finite Automaton (DFA) logic puzzles."
-                    "The DFA processes binary strings using only '0' and '1'."
-                    "Generate structurally sound and logically correct puzzles."
-                }
-                
-                let response = try await session.respond(
-                    to: "Generate a new, unique DFA logic puzzle.",
-                    generating: AIDFALevel.self
-                )
-                
-                let aiLevel = response.content
-                
-                let newLevel = aiLevel.toDFALevel(id: Int.random(in: 1000...9000))
-                
-                self.currentLevel = newLevel
-                self.wasGeneratedByAI = true
-            } catch {
-                print("AI Generation Failed: \(error.localizedDescription)")
-                loadFallbackAILevel()
-            }
+        if let nextLevel = bufferedLevels.first {
+            bufferedLevels.removeFirst()
+            self.currentLevel = nextLevel
+            self.wasGeneratedByAI = true
+            self.isGeneratingAILevel = false
+            print("✅ Displaying Level from buffer: \(nextLevel.title)")
         } else {
-            print("FoundationModels requires iOS 26.0 or newer.")
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            loadFallbackAILevel()
+            isGeneratingAILevel = true
+            self.currentLevel = await generateSingleLevel()
+            self.wasGeneratedByAI = true
+            isGeneratingAILevel = false
+            print("✅ Displaying Level generated on-the-fly: \(self.currentLevel!.title)")
         }
-        #else
-        print("FoundationModels framework unavailable. Using mock AI generation.")
-        try? await Task.sleep(nanoseconds: 1_500_000_000)
-        loadFallbackAILevel()
-        #endif
+        
+        replenishBufferIfNeeded()
     }
     
-    private func loadFallbackAILevel() {
+    private func replenishBufferIfNeeded() {
+        guard !isReplenishingBuffer else { return }
+        guard bufferedLevels.count < targetBufferSize else { return }
+        
+        isReplenishingBuffer = true
+        
+        Task {
+            while self.bufferedLevels.count < self.targetBufferSize {
+                let level = await self.generateSingleLevel()
+                await MainActor.run {
+                    self.bufferedLevels.append(level)
+                    print("📥 Buffered Level in background: \(level.title) (Queue size: \(self.bufferedLevels.count))")
+                }
+            }
+            await MainActor.run {
+                self.isReplenishingBuffer = false
+            }
+        }
+    }
+    
+    private func generateSingleLevel() async -> DFALevel {
+        var draftTitle: String? = nil
+        var draftRule: String? = nil
+        var draftRegex: String? = nil
+        var draftPassing: [String] = []
+        var draftFailing: [String] = []
+
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, *) {
+            if SystemLanguageModel.default.availability == .available {
+                do {
+                    let session = LanguageModelSession {
+                        "You are an expert puzzle game designer and theoretical computer scientist creating Deterministic Finite Automaton (DFA) logic puzzles."
+                        "The DFA processes binary strings using only '0' and '1'."
+                        "The rule MUST define a REGULAR language solvable by a finite state machine."
+                        "Valid regular language types: ends with pattern (e.g. 'ends with 01'), starts with pattern (e.g. 'starts with 1'), contains or does not contain pattern (e.g. 'contains 11'), or parity count (e.g. 'even number of 1s')."
+                        "DO NOT propose non-regular languages like 'equal number of 0s and 1s', 'same count of 0 and 1', or 'palindromes'. Those are impossible for a DFA."
+                        "You MUST generate: 1) question title, 2) player-facing rule, 3) standard anchored regexPattern (^...$) over {0,1}, 4) step-by-step proof, 5) 3 passing strings matching regex, 6) 3 failing strings not matching regex."
+                        "Example: Title: 'Ends in 01', Rule: 'Strings ending in 01', regexPattern: '^[01]*01$', Passing: ['01', '101', '001'], Failing: ['10', '010', '11']."
+                    }
+                    
+                    let response = try await session.respond(
+                        to: "Generate a new, simple, and unambiguous DFA logic puzzle with an anchored regexPattern and candidate test cases.",
+                        generating: AIDFALevel.self
+                    )
+                    
+                    let aiLevel = response.content
+                    draftTitle = aiLevel.title
+                    draftRule = aiLevel.ruleDescription
+                    draftRegex = aiLevel.regexPattern
+                    draftPassing = aiLevel.passingStrings
+                    draftFailing = aiLevel.failingStrings
+                } catch {
+                    print("On-Device AI Draft Failed: \(error.localizedDescription)")
+                }
+            } else {
+                print("SystemLanguageModel not currently available on device.")
+            }
+        }
+        #endif
+
+        // If on-device draft was obtained, check semantic guardrail for non-regular rules
+        if let rule = draftRule, !DFAPuzzleValidator.isPermissibleDFARule(rule: rule) {
+            print("Semantic guardrail caught non-regular rule: '\(rule)'. Adapting to parity...")
+            draftTitle = "Parity Check: Even 1s"
+            draftRule = "Draw a DFA that accepts strings containing an even number of 1s."
+            draftRegex = "^0*(10*10*)*$"
+            draftPassing = ["11", "00", "0101"]
+            draftFailing = ["1", "111", "01"]
+        }
+
+        // Tier 2: If Cloud LLM Provider is configured, verify and refine using the Cloud LLM
+        if CloudLLMService.shared.isConfigured {
+            let proposedTitle = draftTitle ?? "Binary Pattern Puzzle"
+            let proposedRule = draftRule ?? "Draw a DFA that accepts strings ending with '01'."
+            
+            do {
+                let cloudResult = try await CloudLLMService.shared.verifyAndGenerateTestCases(
+                    proposedTitle: proposedTitle,
+                    proposedRule: proposedRule
+                )
+                
+                draftTitle = cloudResult.refinedTitle
+                draftRule = cloudResult.refinedRule
+                draftRegex = cloudResult.regexPattern
+                draftPassing = cloudResult.passingStrings
+                draftFailing = cloudResult.failingStrings
+            } catch {
+                print("Cloud LLM Verification Error: \(error.localizedDescription)")
+            }
+        }
+
+        // Final Tier: In-app deterministic validation & BFS synthesis
+        if let title = draftTitle, let rule = draftRule, let regex = draftRegex {
+            let (verifiedPassing, verifiedFailing, isValid) = DFAPuzzleValidator.validateAndSynthesize(
+                regexPattern: regex,
+                candidatePassing: draftPassing,
+                candidateFailing: draftFailing
+            )
+            
+            if isValid && !verifiedPassing.isEmpty && !verifiedFailing.isEmpty {
+                return DFALevel(
+                    id: Int.random(in: 1000...9000),
+                    title: title,
+                    ruleDescription: rule,
+                    passingStrings: verifiedPassing,
+                    failingStrings: verifiedFailing,
+                    regexPattern: regex
+                )
+            }
+        }
+
+        // Fallback if neither on-device nor cloud produced a valid verified level
+        return getFallbackAILevel()
+    }
+    
+    private func getFallbackAILevel() -> DFALevel {
         let mockLevels = [
             DFALevel(
                 id: 99,
                 title: "Mock AI: Even 1s",
                 ruleDescription: "Draw a DFA that accepts strings with an even number of 1s.",
                 passingStrings: ["11", "00", "0101"],
-                failingStrings: ["1", "111", "01"]
+                failingStrings: ["1", "111", "01"],
+                regexPattern: "^0*(10*10*)*$"
             ),
             DFALevel(
                 id: 100,
                 title: "Mock AI: Starts with 1",
                 ruleDescription: "Draw a DFA that accepts strings starting with '1'.",
                 passingStrings: ["1", "10", "110"],
-                failingStrings: ["0", "01", "011"]
+                failingStrings: ["0", "01", "011"],
+                regexPattern: "^1[01]*$"
             ),
             DFALevel(
                 id: 101,
                 title: "Mock AI: Odd 0s",
                 ruleDescription: "Draw a DFA that accepts strings with an odd number of 0s.",
                 passingStrings: ["0", "101", "000"],
-                failingStrings: ["11", "00", "1001"]
+                failingStrings: ["11", "00", "1001"],
+                regexPattern: "^1*(01*01*)*01*$"
             ),
             DFALevel(
                 id: 102,
                 title: "Mock AI: No 11",
                 ruleDescription: "Draw a DFA that accepts strings that DO NOT contain '11'.",
                 passingStrings: ["10", "010", "000"],
-                failingStrings: ["11", "0110", "111"]
+                failingStrings: ["11", "0110", "111"],
+                regexPattern: "^(0|10)*1?$"
             ),
             DFALevel(
                 id: 103,
                 title: "Mock AI: Length > 2",
                 ruleDescription: "Draw a DFA that accepts strings strictly longer than 2 characters.",
                 passingStrings: ["000", "1010", "111"],
-                failingStrings: ["0", "11", ""]
+                failingStrings: ["0", "11", ""],
+                regexPattern: "^[01]{3,}$"
             )
         ]
         
-        self.currentLevel = mockLevels.randomElement()!
-        self.wasGeneratedByAI = false
+        return mockLevels.randomElement()!
     }
     
     func drawSolution(into vm: MachineViewModel) {

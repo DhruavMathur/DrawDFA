@@ -54,6 +54,16 @@ struct DFALevel: Codable, Equatable, Identifiable {
     var ruleDescription: String
     var passingStrings: [String]
     var failingStrings: [String]
+    var regexPattern: String?
+    
+    init(id: Int, title: String, ruleDescription: String, passingStrings: [String], failingStrings: [String], regexPattern: String? = nil) {
+        self.id = id
+        self.title = title
+        self.ruleDescription = ruleDescription
+        self.passingStrings = passingStrings
+        self.failingStrings = failingStrings
+        self.regexPattern = regexPattern
+    }
 }
 
 #if canImport(FoundationModels)
@@ -64,11 +74,20 @@ import FoundationModels
 struct AIDFALevel {
     @Guide(description: "A short, catchy title for the question")
     var title: String
-    @Guide(description: "The exact question / rule the DFA must enforce")
+    
+    @Guide(description: "A simple, mathematically rigorous rule for binary strings (e.g., 'must contain 101', 'ends with 01')")
     var ruleDescription: String
-    @Guide(description: "3 binary strings that strictly pass the rule", .count(3))
+    
+    @Guide(description: "A standard regular expression anchored with ^ and $ matching all binary strings over {0,1} that satisfy the rule. E.g. '^[01]*01$' for ends with 01, or '^[01]*11[01]*$' for contains 11.")
+    var regexPattern: String
+    
+    @Guide(description: "Before generating the strings, write out a brief step-by-step proof explaining exactly why your chosen passing strings mathematically satisfy the rule, and why your failing strings fail.")
+    var stepByStepProof: String
+    
+    @Guide(description: "3 unique binary strings that 100% satisfy the rule. Double-check these carefully against the regex.", .count(3))
     var passingStrings: [String]
-    @Guide(description: "3 binary strings that strictly fail the rule", .count(3))
+    
+    @Guide(description: "3 unique binary strings that absolutely DO NOT satisfy the rule. Double-check these carefully against the regex.", .count(3))
     var failingStrings: [String]
     
     func toDFALevel(id: Int) -> DFALevel {
@@ -77,7 +96,8 @@ struct AIDFALevel {
             title: title,
             ruleDescription: ruleDescription,
             passingStrings: passingStrings,
-            failingStrings: failingStrings
+            failingStrings: failingStrings,
+            regexPattern: regexPattern
         )
     }
 }

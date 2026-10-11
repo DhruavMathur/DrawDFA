@@ -12,6 +12,9 @@ class MachineViewModel: ObservableObject {
     @Published var remainingInputString: String = ""
     @Published var testString: String = ""
     
+    @Published var enforceStrictDFA: Bool = false
+    @Published var toastMessage: String? = nil
+    
     
     private var nodeCounter = 0
     
@@ -134,11 +137,47 @@ class MachineViewModel: ObservableObject {
         currentActiveNodeID = nil
         currentActiveTransitionID = nil
         remainingInputString = ""
+        toastMessage = nil
+    }
+    
+    func validateDFAMachine() -> Bool {
+        for node in nodes {
+            let outTransitions = transitions.filter { $0.fromNodeID == node.id }
+            var missingSymbols: [Character] = []
+            
+            if !outTransitions.contains(where: { $0.symbols.contains("0") }) {
+                missingSymbols.append("0")
+            }
+            if !outTransitions.contains(where: { $0.symbols.contains("1") }) {
+                missingSymbols.append("1")
+            }
+            
+            if !missingSymbols.isEmpty {
+                let symbolStr = missingSymbols.map { "'\($0)'" }.joined(separator: " and ")
+                let message = "Invalid DFA: State '\(node.name)' is missing a transition for \(symbolStr)."
+                self.toastMessage = message
+                
+                Task {
+                    try? await Task.sleep(nanoseconds: 4_000_000_000)
+                    await MainActor.run {
+                        if self.toastMessage == message {
+                            withAnimation {
+                                self.toastMessage = nil
+                            }
+                        }
+                    }
+                }
+                return false
+            }
+        }
+        return true
     }
     
     func playSimulation() async {
         guard simulationStatus != .running else { return }
-        guard !testString.isEmpty else { return }
+        if enforceStrictDFA {
+            guard validateDFAMachine() else { return }
+        }
         
         resetSimulation()
         simulationStatus = .running
